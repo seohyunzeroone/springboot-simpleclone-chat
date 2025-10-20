@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat</title>
+    <script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+</head>
+<body>
+<h3>채팅방</h3>
+<div id="msgArea" style="height:300px; overflow-y:auto; border:1px solid #aaa; padding:5px; margin-bottom:10px;"></div>
+<input type="text" id="msg" placeholder="메시지를 입력하세요">
+<button id="button-send">전송</button>
+
+<script>
+    $(function () {
+        // 1️⃣ 닉네임 강제 입력
+        let username = '';
+        while (!username.trim()) {
+            username = prompt('닉네임을 입력하세요');
+        }
+        username = username.replace(/:/g, ''); // 콜론(:) 제거 (프로토콜 구분자 충돌 방지)
+
+        // 2️⃣ WebSocket 연결 (http/https 자동 구분)
+        const wsScheme = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+        const wsUrl = wsScheme + location.host + '/ws/chat';
+        const websocket = new WebSocket(wsUrl);
+
+        websocket.onopen = function () {
+            sendRaw(username + ': 님이 입장하셨습니다.');
+        };
+
+        websocket.onmessage = function (e) {
+            onMessage(e.data);
+        };
+
+        websocket.onclose = function () {
+            appendMsg('system', '연결이 종료되었습니다.');
+        };
+
+        // 3️⃣ 메시지 전송 (버튼 또는 엔터키)
+        $('#button-send').on('click', send);
+        $('#msg').on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                send();
+            }
+        });
+
+        function send() {
+            const input = $('#msg');
+            const text = input.val().trim();
+            if (!text) return;
+            sendRaw(username + ':' + text);
+            input.val('').focus();
+        }
+
+        function sendRaw(payload) {
+            if (websocket.readyState === WebSocket.OPEN) {
+                websocket.send(payload);
+            }
+        }
+
+        // 4️⃣ 서버에서 메시지 수신 시 출력
+        function onMessage(data) {
+            const idx = data.indexOf(':');
+            let sender = '', message = data;
+            if (idx > -1) {
+                sender = data.substring(0, idx).trim();
+                message = data.substring(idx + 1).trim();
+            }
+
+            if (sender === username) {
+                appendMsg('me', `${sender} : ${message}`);
+            } else {
+                appendMsg('other', `${sender} : ${message}`);
+            }
+        }
+
+        // 5️⃣ 메시지 출력 함수
+        function appendMsg(type, text) {
+            const color = type === 'me' ? '#e6e6e6' : '#fff3cd';
+            const div = `<div style="background:${color}; margin:3px; padding:5px; border-radius:4px;">${escapeHtml(text)}</div>`;
+            $('#msgArea').append(div);
+            const box = document.getElementById('msgArea');
+            box.scrollTop = box.scrollHeight;
+        }
+
+        // 6️⃣ HTML 특수문자 이스케이프 (보안)
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+    });
+</script>
+</body>
+</html>
