@@ -1,3 +1,4 @@
+// src/main/java/com/example/websocketproj/handler/ChatHandler.java
 package com.example.websocketproj.handler;
 
 import com.example.websocketproj.chat.ChatLogService;
@@ -20,6 +21,7 @@ public class ChatHandler extends TextWebSocketHandler {
 
     private static final List<WebSocketSession> sessions = new ArrayList<>();
 
+    // DB/JPA가 켜진 환경에서만 주입되어 사용할 수 있도록 ObjectProvider 사용
     private final ObjectProvider<ChatLogService> chatLogServiceProvider;
 
     @Override
@@ -27,14 +29,15 @@ public class ChatHandler extends TextWebSocketHandler {
         String payload = message.getPayload();
         log.info("payload: {}", payload);
 
-        // 브로드캐스트
+        // 모든 세션에 브로드캐스트
         for (WebSocketSession s : sessions) {
             s.sendMessage(message);
         }
 
-        // DB 저장 (DB/JPA 켜진 환경에서만)
+        // DB 저장 (있으면 호출)
         ChatLogService svc = chatLogServiceProvider.getIfAvailable();
         if (svc != null) {
+            log.info("[ChatHandler] saving to DB");
             svc.save("anonymous", payload);
         }
     }

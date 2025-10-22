@@ -2,7 +2,6 @@ package com.example.websocketproj.chat;
 
 import jakarta.persistence.*;
 import lombok.*;
-
 import java.time.LocalDateTime;
 
 @Entity @Table(name="chat_logs")
@@ -17,5 +16,10 @@ public class ChatLog {
     private String message;
 
     @Column(nullable = false, updatable = false)
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private LocalDateTime createdAt; // ← 필드 초기화 제거
+
+    @PrePersist
+    void prePersist() {
+        if (createdAt == null) createdAt = LocalDateTime.now();
+    }
 }
