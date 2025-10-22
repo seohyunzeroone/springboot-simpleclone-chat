@@ -5,6 +5,11 @@
     <title>Chat</title>
     <style>
         body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; }
+        #loginScreen { text-align: center; padding: 60px 20px; }
+        #loginScreen h2 { margin-bottom: 20px; }
+        #loginScreen input { padding: 12px; width: 300px; max-width: 100%; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; }
+        #loginScreen button { margin-top: 12px; padding: 12px 24px; border: 0; border-radius: 6px; background: #2f6feb; color: white; cursor: pointer; font-size: 16px; }
+        #chatScreen { display: none; }
         #log { border: 1px solid #ddd; height: 320px; overflow-y: auto; padding: 8px; border-radius: 8px; }
         #controls { margin-top: 10px; display: flex; gap: 8px; }
         #msg { flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
@@ -15,23 +20,34 @@
     </style>
 </head>
 <body>
-<h2>WebSocket Chat</h2>
 
-<div id="log"></div>
+<div id="loginScreen">
+    <h2>WebSocket Chat</h2>
+    <p>채팅에 참여하려면 닉네임을 입력하세요</p>
+    <input id="usernameInput" type="text" placeholder="닉네임을 입력하세요" maxlength="20" />
+    <br>
+    <button id="joinBtn">입장하기</button>
+</div>
 
-<div id="controls">
-    <input id="msg" type="text" placeholder="메시지를 입력하세요…" />
-    <button id="sendBtn">보내기</button>
-    <button id="leaveBtn" class="secondary">채팅방 나가기</button>
-    <button id="renameBtn" class="secondary">닉네임 변경</button>
+<div id="chatScreen">
+    <h2>WebSocket Chat</h2>
+    <div id="log"></div>
+    <div id="controls">
+        <input id="msg" type="text" placeholder="메시지를 입력하세요…" />
+        <button id="sendBtn">보내기</button>
+        <button id="leaveBtn" class="secondary">채팅방 나가기</button>
+    </div>
 </div>
 
 <script>
+    const loginScreen = document.getElementById('loginScreen');
+    const chatScreen = document.getElementById('chatScreen');
+    const usernameInput = document.getElementById('usernameInput');
+    const joinBtn = document.getElementById('joinBtn');
     const logEl = document.getElementById('log');
     const msgEl = document.getElementById('msg');
     const sendBtn = document.getElementById('sendBtn');
     const leaveBtn = document.getElementById('leaveBtn');
-    const renameBtn = document.getElementById('renameBtn');
 
     const wsPath = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
     const keepAliveIntervalMs = 30000;
@@ -41,23 +57,8 @@
     let leaving = false;
     let reconnectAttempt = 0;
     let keepAliveTimer = null;
-    let username = (localStorage.getItem('chat.username') || '').trim();
+    let username = '';
     let sentJoinForThisConnection = false;
-
-    function promptUsername() {
-        let v = '';
-        while (!v) {
-            v = prompt('채팅에서 사용할 이름을 입력하세요:');
-            if (v === null) return; // 취소 시 종료
-            v = (v || '').trim();
-        }
-        username = v;
-        localStorage.setItem('chat.username', username);
-    }
-
-    function ensureUsername() {
-        if (!username) promptUsername();
-    }
 
     function appendLine(text, cls = '') {
         const idx = text.indexOf(':');
@@ -96,14 +97,12 @@
             reconnectAttempt = 0;
             appendLine('[연결됨]', 'sys');
             startKeepAlive();
-            ensureUsername();
             if (username && !sentJoinForThisConnection) {
                 try { ws.send(`${username}: 님이 입장하셨습니다.`); } catch (_) {}
                 sentJoinForThisConnection = true;
             }
         };
 
-        // ✅ keepalive 숨김
         ws.onmessage = (evt) => {
             if (evt.data === '__ping__' || evt.data === '__pong__') return;
             appendLine(evt.data);
@@ -128,9 +127,7 @@
 
     function sendMessage() {
         const text = msgEl.value.trim();
-        if (!text) return;
-        ensureUsername();
-        if (!username) return;
+        if (!text || !username) return;
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(`${username}: ${text}`);
             msgEl.value = '';
@@ -139,27 +136,43 @@
         }
     }
 
-    // UI
+    function joinChat() {
+        const name = usernameInput.value.trim();
+        if (!name) {
+            alert('닉네임을 입력해주세요.');
+            return;
+        }
+        username = name;
+        loginScreen.style.display = 'none';
+        chatScreen.style.display = 'block';
+        msgEl.focus();
+        connect();
+    }
+
+    // UI 이벤트
+    joinBtn.addEventListener('click', joinChat);
+    usernameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinChat(); });
+
     sendBtn.addEventListener('click', sendMessage);
     msgEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
 
     leaveBtn.addEventListener('click', () => {
-        ensureUsername();
         if (ws && ws.readyState === WebSocket.OPEN) {
             try { ws.send(`${username}: 님이 퇴장하셨습니다.`); } catch (_){}
             leaving = true;
             ws.close(1000, 'client-leave');
         }
+        // 로그인 화면으로 돌아가기
+        chatScreen.style.display = 'none';
+        loginScreen.style.display = 'block';
+        usernameInput.value = '';
+        username = '';
+        leaving = false;
+        sentJoinForThisConnection = false;
     });
 
-    renameBtn.addEventListener('click', () => {
-        promptUsername();
-        appendLine(`[닉네임이 '${username}'(으)로 설정되었습니다]`, 'sys');
-    });
-
-    // 처음 들어오면 닉네임부터
-    ensureUsername();
-    connect();
+    // 초기 포커스
+    usernameInput.focus();
 </script>
 </body>
 </html>
