@@ -1,4 +1,3 @@
-// src/main/java/com/example/websocketproj/handler/ChatHandler.java
 package com.example.websocketproj.handler;
 
 import com.example.websocketproj.chat.ChatLogService;
@@ -21,7 +20,6 @@ public class ChatHandler extends TextWebSocketHandler {
 
     private static final List<WebSocketSession> sessions = new ArrayList<>();
 
-    // 주입을 선택적으로 받기: 서비스가 없으면(null) 그냥 건너뜀
     private final ObjectProvider<ChatLogService> chatLogServiceProvider;
 
     @Override
@@ -29,26 +27,26 @@ public class ChatHandler extends TextWebSocketHandler {
         String payload = message.getPayload();
         log.info("payload: {}", payload);
 
-        // DB 저장: 서비스가 로드된 환경에서만 실행
+        // 브로드캐스트
+        for (WebSocketSession s : sessions) {
+            s.sendMessage(message);
+        }
+
+        // DB 저장 (DB/JPA 켜진 환경에서만)
         ChatLogService svc = chatLogServiceProvider.getIfAvailable();
         if (svc != null) {
             svc.save("anonymous", payload);
         }
-
-        // 브로드캐스트 기존 동작 유지
-        for (WebSocketSession s : sessions) {
-            s.sendMessage(message);
-        }
     }
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+    public void afterConnectionEstablished(WebSocketSession session) {
         sessions.add(session);
         log.info("{} 접속", session.getId());
     }
 
     @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         sessions.remove(session);
         log.info("{} 접속 해제", session.getId());
     }
