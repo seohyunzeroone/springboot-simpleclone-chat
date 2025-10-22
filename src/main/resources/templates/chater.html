@@ -1,124 +1,146 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="UTF-8" />
     <title>Chat</title>
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
-    <meta http-equiv="Pragma" content="no-cache"/>
-    <meta http-equiv="Expires" content="0"/>
-    <script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+    <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; }
+        #log { border: 1px solid #ddd; height: 320px; overflow-y: auto; padding: 8px; border-radius: 8px; }
+        #controls { margin-top: 10px; display: flex; gap: 8px; }
+        #msg { flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+        button { padding: 8px 12px; border: 0; border-radius: 6px; background: #2f6feb; color: white; cursor: pointer; }
+        button.secondary { background: #777; }
+        .sys { color: #7a7a7a; font-style: italic; }
+    </style>
 </head>
 <body>
-<h3>채팅방</h3>
-<div id="msgArea" style="height:300px; overflow-y:auto; border:1px solid #aaa; padding:5px; margin-bottom:10px;"></div>
-<input type="text" id="msg" placeholder="메시지를 입력하세요">
-<button id="button-send">전송</button>
+<h2>WebSocket Chat</h2>
+
+<div id="log"></div>
+
+<div id="controls">
+    <input id="msg" type="text" placeholder="메시지를 입력하세요…" />
+    <button id="sendBtn">보내기</button>
+    <button id="leaveBtn" class="secondary">채팅방 나가기</button>
+</div>
 
 <script>
-    (function () {
-        // ✅ 닉네임을 반드시 먼저 받아오도록 함수로 분리
-        function askUsername() {
-            let name = '';
-            // null(취소)일 때도 다시 물어보도록 처리
-            while (!name || !name.trim()) {
-                name = prompt('닉네임을 입력하세요');
-            }
-            // 콜론(:) 제거 (프로토콜 구분자 충돌 방지)
-            return name.replace(/:/g, '');
+    const logEl = document.getElementById('log');
+    const msgEl = document.getElementById('msg');
+    const sendBtn = document.getElementById('sendBtn');
+    const leaveBtn = document.getElementById('leaveBtn');
+
+    // ===== 설정 =====
+    const wsPath = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
+    const keepAliveIntervalMs = 30000; // 30초에 한 번 ping
+    const maxBackoffMs = 30000;        // 재연결 최대 대기 30초
+
+    // ===== 상태 =====
+    let ws = null;
+    let leaving = false;           // 사용자가 '나가기' 눌렀는지 여부
+    let reconnectAttempt = 0;      // 재연결 시도 회수
+    let keepAliveTimer = null;
+
+    function appendLine(text, cls = '') {
+        const p = document.createElement('div');
+        if (cls) p.className = cls;
+        p.textContent = text;
+        logEl.appendChild(p);
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function startKeepAlive() {
+        stopKeepAlive();
+        keepAliveTimer = setInterval(() => {
+            try {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send('__ping__'); // 서버에서 별도 처리 안 해도 OK
+                }
+            } catch (e) {}
+        }, keepAliveIntervalMs);
+    }
+
+    function stopKeepAlive() {
+        if (keepAliveTimer) {
+            clearInterval(keepAliveTimer);
+            keepAliveTimer = null;
         }
+    }
 
-        let username;
+    function connect() {
+        ws = new WebSocket(wsPath);
 
-        // ✅ DOM이 준비되면 실행
-        $(function () {
-            if (!username) username = askUsername();          // 첫 진입 시
-            startChat(username);                               // 닉네임 받은 후에만 연결
-        });
+        ws.onopen = () => {
+            reconnectAttempt = 0;
+            appendLine('[연결됨]', 'sys');
+            startKeepAlive();
+        };
 
-        // ✅ bfcache(뒤로가기 캐시)로 돌아온 경우에도 다시 물어보도록
-        window.addEventListener('pageshow', function (e) {
-            if (e.persisted || (performance && performance.getEntriesByType)) {
-                // 이미 연결돼 있더라도 재진입 시 닉네임 재설정 원한다면 아래 주석 해제
+        ws.onmessage = (evt) => {
+            if (evt.data === '__pong__') return; // 혹시 서버에서 pong 주면 무시
+            appendLine(evt.data);
+        };
+
+        ws.onclose = (evt) => {
+            stopKeepAlive();
+            if (leaving) {
+                appendLine('[연결 종료]', 'sys');
+                return;
             }
-        });
+            appendLine(`[연결 끊김 - 자동 재연결 시도] (code=${evt.code})`, 'sys');
+            scheduleReconnect();
+        };
 
-        // ✅ WebSocket 연결/핸들러는 닉네임 받은 뒤에만 세팅
-        function startChat(username) {
-            // WebSocket 연결 (http/https 자동 구분)
-            const wsScheme = (location.protocol === 'https:') ? 'wss://' : 'ws://';
-            const wsUrl = wsScheme + location.host + '/ws/chat';
-            const websocket = new WebSocket(wsUrl);
+        ws.onerror = () => {
+            // 일부 브라우저는 error 후 close가 이어짐
+            appendLine('[오류 발생]', 'sys');
+        };
+    }
 
-            websocket.onopen = function () {
-                // 연결 직후 안내 메시지 전송
-                sendRaw(username + ': 님이 입장하셨습니다.');
-            };
+    function scheduleReconnect() {
+        // 지수 백오프
+        reconnectAttempt++;
+        const wait = Math.min(1000 * Math.pow(2, reconnectAttempt), maxBackoffMs);
+        setTimeout(() => {
+            if (!leaving) connect();
+        }, wait);
+    }
 
-            websocket.onmessage = function (e) {
-                onMessage(e.data);
-            };
-
-            websocket.onclose = function () {
-                appendMsg('system', '연결이 종료되었습니다.');
-            };
-
-            // 메시지 전송 (버튼 또는 엔터키)
-            $('#button-send').off('click').on('click', send);
-            $('#msg').off('keydown').on('keydown', function (e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    send();
-                }
-            });
-
-            function send() {
-                const input = $('#msg');
-                const text = input.val().trim();
-                if (!text) return;
-                sendRaw(username + ':' + text);
-                input.val('').focus();
-            }
-
-            function sendRaw(payload) {
-                if (websocket.readyState === WebSocket.OPEN) {
-                    websocket.send(payload);
-                }
-            }
-
-            // 서버에서 메시지 수신 시 출력
-            function onMessage(data) {
-                const idx = data.indexOf(':');
-                let sender = '', message = data;
-                if (idx > -1) {
-                    sender = data.substring(0, idx).trim();
-                    message = data.substring(idx + 1).trim();
-                }
-
-                if (sender === username) {
-                    appendMsg('me', `${sender} : ${message}`);
-                } else {
-                    appendMsg('other', `${sender} : ${message}`);
-                }
-            }
-
-            // 메시지 출력 함수
-            function appendMsg(type, text) {
-                const color = type === 'me' ? '#e6e6e6' : '#fff3cd';
-                const div = `<div style="background:${color}; margin:3px; padding:5px; border-radius:4px;">${escapeHtml(text)}</div>`;
-                $('#msgArea').append(div);
-                const box = document.getElementById('msgArea');
-                box.scrollTop = box.scrollHeight;
-            }
-
-            // HTML 특수문자 이스케이프 (보안)
-            function escapeHtml(str) {
-                return String(str)
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;');
-            }
+    function sendMessage() {
+        const text = msgEl.value.trim();
+        if (!text) return;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(text);
+            msgEl.value = '';
+        } else {
+            appendLine('[아직 연결되지 않았습니다. 잠시 후 다시 시도하세요.]', 'sys');
         }
-    })();
+    }
+
+    // UI 핸들러
+    sendBtn.addEventListener('click', sendMessage);
+    msgEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+    leaveBtn.addEventListener('click', () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            leaving = true;
+            ws.close(1000, 'client-leave'); // 정상 종료
+        }
+    });
+
+    // 브라우저 탭 닫기/새로고침 경고(원하면 활성화)
+    window.addEventListener('beforeunload', (e) => {
+        if (!leaving) {
+            // 경고 표시(일부 브라우저는 커스텀 문구 미지원)
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+
+    // 초기 연결
+    connect();
 </script>
 </body>
 </html>
