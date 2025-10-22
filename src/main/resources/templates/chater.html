@@ -23,6 +23,7 @@
     <input id="msg" type="text" placeholder="메시지를 입력하세요…" />
     <button id="sendBtn">보내기</button>
     <button id="leaveBtn" class="secondary">채팅방 나가기</button>
+    <button id="renameBtn" class="secondary">닉네임 변경</button>
 </div>
 
 <script>
@@ -30,31 +31,35 @@
     const msgEl = document.getElementById('msg');
     const sendBtn = document.getElementById('sendBtn');
     const leaveBtn = document.getElementById('leaveBtn');
+    const renameBtn = document.getElementById('renameBtn');
 
-    // ===== 설정 =====
     const wsPath = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
-    const keepAliveIntervalMs = 30000; // 30초 ping
-    const maxBackoffMs = 30000;        // 재연결 최대 30초
+    const keepAliveIntervalMs = 30000;
+    const maxBackoffMs = 30000;
 
-    // ===== 상태 =====
     let ws = null;
-    let leaving = false;               // '나가기' 눌렀는지 여부
+    let leaving = false;
     let reconnectAttempt = 0;
     let keepAliveTimer = null;
     let username = (localStorage.getItem('chat.username') || '').trim();
     let sentJoinForThisConnection = false;
 
-    function ensureUsername() {
-        while (!username) {
-            const v = prompt('채팅에서 사용할 이름을 입력하세요:');
-            if (v === null) break; // 사용자가 취소
-            username = (v || '').trim();
+    function promptUsername() {
+        let v = '';
+        while (!v) {
+            v = prompt('채팅에서 사용할 이름을 입력하세요:');
+            if (v === null) return; // 취소 시 종료
+            v = (v || '').trim();
         }
-        if (username) localStorage.setItem('chat.username', username);
+        username = v;
+        localStorage.setItem('chat.username', username);
+    }
+
+    function ensureUsername() {
+        if (!username) promptUsername();
     }
 
     function appendLine(text, cls = '') {
-        // "이름: 메시지" 형식이면 이름만 볼드 처리
         const idx = text.indexOf(':');
         const wrap = document.createElement('div');
         if (cls) wrap.className = cls;
@@ -79,20 +84,10 @@
     function startKeepAlive() {
         stopKeepAlive();
         keepAliveTimer = setInterval(() => {
-            try {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send('__ping__'); // 내부 keepalive. 화면에는 표시 안 함(아래 onmessage 필터)
-                }
-            } catch (_) {}
+            try { if (ws && ws.readyState === WebSocket.OPEN) ws.send('__ping__'); } catch (_) {}
         }, keepAliveIntervalMs);
     }
-
-    function stopKeepAlive() {
-        if (keepAliveTimer) {
-            clearInterval(keepAliveTimer);
-            keepAliveTimer = null;
-        }
-    }
+    function stopKeepAlive() { if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; } }
 
     function connect() {
         ws = new WebSocket(wsPath);
@@ -101,51 +96,41 @@
             reconnectAttempt = 0;
             appendLine('[연결됨]', 'sys');
             startKeepAlive();
-            // 연결 성립 후 1회 입장 알림
+            ensureUsername();
             if (username && !sentJoinForThisConnection) {
                 try { ws.send(`${username}: 님이 입장하셨습니다.`); } catch (_) {}
                 sentJoinForThisConnection = true;
             }
         };
 
-        // ✅ 여기! keepalive 메시지 숨김 처리
+        // ✅ keepalive 숨김
         ws.onmessage = (evt) => {
-            if (evt.data === '__pong__' || evt.data === '__ping__') return; // 내부 keepalive 무시
+            if (evt.data === '__ping__' || evt.data === '__pong__') return;
             appendLine(evt.data);
         };
 
         ws.onclose = (evt) => {
             stopKeepAlive();
             sentJoinForThisConnection = false;
-            if (leaving) {
-                appendLine('[연결 종료]', 'sys');
-                return;
-            }
+            if (leaving) { appendLine('[연결 종료]', 'sys'); return; }
             appendLine(`[연결 끊김 - 자동 재연결 시도] (code=${evt.code})`, 'sys');
             scheduleReconnect();
         };
 
-        ws.onerror = () => {
-            // 일부 브라우저는 error 후 close가 이어짐
-            appendLine('[오류 발생]', 'sys');
-        };
+        ws.onerror = () => appendLine('[오류 발생]', 'sys');
     }
 
     function scheduleReconnect() {
         reconnectAttempt++;
         const wait = Math.min(1000 * Math.pow(2, reconnectAttempt), maxBackoffMs);
-        setTimeout(() => {
-            if (!leaving) connect();
-        }, wait);
+        setTimeout(() => { if (!leaving) connect(); }, wait);
     }
 
     function sendMessage() {
         const text = msgEl.value.trim();
         if (!text) return;
-        if (!username) {
-            ensureUsername();
-            if (!username) return; // 여전히 없음
-        }
+        ensureUsername();
+        if (!username) return;
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(`${username}: ${text}`);
             msgEl.value = '';
@@ -154,31 +139,25 @@
         }
     }
 
-    // UI 핸들러
+    // UI
     sendBtn.addEventListener('click', sendMessage);
-    msgEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') sendMessage();
-    });
+    msgEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
 
     leaveBtn.addEventListener('click', () => {
-        if (!username) ensureUsername();
+        ensureUsername();
         if (ws && ws.readyState === WebSocket.OPEN) {
-            // 퇴장 알림 전송 후 정상 종료
             try { ws.send(`${username}: 님이 퇴장하셨습니다.`); } catch (_){}
             leaving = true;
             ws.close(1000, 'client-leave');
         }
     });
 
-    // (선택) 탭 닫기/새로고침 경고
-    window.addEventListener('beforeunload', (e) => {
-        if (!leaving) {
-            e.preventDefault();
-            e.returnValue = '';
-        }
+    renameBtn.addEventListener('click', () => {
+        promptUsername();
+        appendLine(`[닉네임이 '${username}'(으)로 설정되었습니다]`, 'sys');
     });
 
-    // 초기: 이름 확보 후 연결
+    // 처음 들어오면 닉네임부터
     ensureUsername();
     connect();
 </script>

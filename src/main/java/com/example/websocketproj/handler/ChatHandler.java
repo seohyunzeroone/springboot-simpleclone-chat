@@ -29,18 +29,27 @@ public class ChatHandler extends TextWebSocketHandler {
         String payload = message.getPayload();
         log.info("payload: {}", payload);
 
-        // 모든 세션에 브로드캐스트
-        for (WebSocketSession s : sessions) {
-            s.sendMessage(message);
-        }
+        // keepalive 무시
+        if ("__ping__".equals(payload) || "__pong__".equals(payload)) return;
 
-        // DB 저장 (있으면 호출)
+        // 모든 세션에 브로드캐스트
+        for (WebSocketSession s : sessions) s.sendMessage(message);
+
+        // DB 저장: "닉네임: 내용" 파싱
         ChatLogService svc = chatLogServiceProvider.getIfAvailable();
         if (svc != null) {
-            log.info("[ChatHandler] saving to DB");
-            svc.save("anonymous", payload);
+            String username = "anonymous";
+            String body = payload;
+
+            int idx = payload.indexOf(':');
+            if (idx > 0) {
+                username = payload.substring(0, idx).trim();
+                body = payload.substring(idx + 1).trim();
+            }
+            svc.save(username, body);
         }
     }
+
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
